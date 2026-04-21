@@ -4847,7 +4847,7 @@
     if (targetDocument === document) {
       return true;
     }
-    return !!targetDocument.querySelector("iframe[id^='ueditor'],iframe[src*='ueditor'],textarea,input,[contenteditable='true'],body[contenteditable='true']");
+    return !!targetDocument.querySelector("iframe[id^='ueditor'],iframe[src*='ueditor'],textarea,input,[contenteditable],body[contenteditable='true'],body[contenteditable='']");
   };
   const unlockPasteForDocument = (targetDocument) => {
     if (!isPasteRelevantDocument(targetDocument)) {
@@ -4859,9 +4859,11 @@
     }
     if (!html[PASTE_UNLOCK_KEY]) {
       html[PASTE_UNLOCK_KEY] = true;
-      html.addEventListener("paste", (event) => {
-        event.stopImmediatePropagation();
-      }, true);
+      ["paste", "copy", "cut", "contextmenu", "selectstart"].forEach((eventName) => {
+        html.addEventListener(eventName, (event) => {
+          event.stopImmediatePropagation();
+        }, true);
+      });
     }
     const allowAction = () => true;
     const body = targetDocument.body;
@@ -4878,6 +4880,50 @@
       } catch (_error) {
       }
     });
+    queryAll(["textarea", "input", "[contenteditable]", "body"], targetDocument).forEach((element) => {
+      if (!element) {
+        return;
+      }
+      try {
+        element.onpaste = allowAction;
+        element.oncopy = allowAction;
+        element.oncut = allowAction;
+        element.oncontextmenu = allowAction;
+        element.onselectstart = allowAction;
+      } catch (_error) {
+      }
+      if ("readOnly" in element) {
+        try {
+          element.readOnly = false;
+        } catch (_error) {
+        }
+      }
+      if ("disabled" in element) {
+        try {
+          element.disabled = false;
+        } catch (_error) {
+        }
+      }
+      try {
+        element.removeAttribute("readonly");
+        element.removeAttribute("disabled");
+        element.removeAttribute("onpaste");
+        element.removeAttribute("oncopy");
+        element.removeAttribute("oncut");
+        element.removeAttribute("oncontextmenu");
+        element.removeAttribute("onselectstart");
+        if (element.matches("[contenteditable='false']")) {
+          element.setAttribute("contenteditable", "true");
+        }
+      } catch (_error) {
+      }
+    });
+    try {
+      if (targetDocument.designMode === "off" && queryFirst(["iframe[id^='ueditor']", "iframe[src*='ueditor']"], targetDocument)) {
+        targetDocument.designMode = "on";
+      }
+    } catch (_error) {
+    }
   };
   const getAccessibleDocuments = () => {
     const documents = [];
