@@ -235,7 +235,13 @@
     maxLogCount: 200,
     maxQuestionCount: 120,
     iframeReadyTimeout: 15e3,
-    mediaElementTimeout: 9e4
+    mediaElementTimeout: 9e4,
+    logDedupWindow: 2500,
+    accessibleDocumentCacheMs: 1200,
+    pasteUnlockInterval: 4e3,
+    yktBackgroundInterval: 4500,
+    observerDebounceMs: 240,
+    yktUiSyncInterval: 1200
   };
   const RUNTIME_STATE_KEY = "__xuexutongRuntimeState__";
   const runtimeWindow = _unsafeWindow || window;
@@ -253,6 +259,13 @@
   runtimeState.currentRouteSceneKey = runtimeState.currentRouteSceneKey ?? "";
   runtimeState.logicRunLocks = runtimeState.logicRunLocks && typeof runtimeState.logicRunLocks === "object" ? runtimeState.logicRunLocks : {};
   runtimeState.yktBackgroundWatcherStarted = runtimeState.yktBackgroundWatcherStarted ?? false;
+  runtimeState.pasteMutationWatcherStarted = runtimeState.pasteMutationWatcherStarted ?? false;
+  runtimeState.yktBackgroundMutationWatcherStarted = runtimeState.yktBackgroundMutationWatcherStarted ?? false;
+  runtimeState.accessibleDocuments = Array.isArray(runtimeState.accessibleDocuments) ? runtimeState.accessibleDocuments : [];
+  runtimeState.accessibleDocumentsUpdatedAt = runtimeState.accessibleDocumentsUpdatedAt ?? 0;
+  runtimeState.accessibleDocumentRefreshTimer = runtimeState.accessibleDocumentRefreshTimer ?? 0;
+  runtimeState.pasteUnlockTimer = runtimeState.pasteUnlockTimer ?? 0;
+  runtimeState.yktBackgroundSyncTimer = runtimeState.yktBackgroundSyncTimer ?? 0;
   const getScriptInfo = () => {
     return {
       name: _GM_info.script.name,
@@ -418,10 +431,23 @@
   };
   const useLogStore = pinia.defineStore("logStore", {
     state: () => ({
-      logList: []
+      logList: [],
+      recentLogMap: {}
     }),
     actions: {
-      addLog(message, type) {
+      addLog(message, type, dedupeWindow = SCRIPT_LIMITS.logDedupWindow) {
+        const now = Date.now();
+        const logKey = `${type || "info"}:${message}`;
+        const lastTime = this.recentLogMap[logKey] || 0;
+        if (dedupeWindow > 0 && now - lastTime < dedupeWindow) {
+          return;
+        }
+        this.recentLogMap[logKey] = now;
+        Object.keys(this.recentLogMap).forEach((key) => {
+          if (now - this.recentLogMap[key] > SCRIPT_LIMITS.logDedupWindow * 6) {
+            delete this.recentLogMap[key];
+          }
+        });
         const log = {
           message,
           time: getDateTime(),
@@ -4906,6 +4932,70 @@
     return new Promise((resolve) => setTimeout(resolve, second * 1e3));
   };
   const PASTE_UNLOCK_KEY = "__xuexutongPasteUnlock__";
+  const IFRAME_REFRESH_BIND_KEY = "__xuexutongFrameRefreshBound__";
+  const scheduleRuntimeTimer = (timerKey, callback, delay = 0) => {
+    if (runtimeState[timerKey]) {
+      clearTimeout(runtimeState[timerKey]);
+    }
+    runtimeState[timerKey] = window.setTimeout(() => {
+      runtimeState[timerKey] = 0;
+      callback();
+    }, delay);
+  };
+  const elementMatchesAnySelector = (element, selectors) => {
+    if (!element || element.nodeType !== 1) {
+      return false;
+    }
+    return getSelectorList(selectors).some((selector) => {
+      try {
+        return element.matches(selector) || !!element.querySelector(selector);
+      } catch (_error) {
+        return false;
+      }
+    });
+  };
+  const isRelevantMutationNode = (node, selectors) => {
+    if (node?.nodeType === 1 && node.tagName === "IFRAME") {
+      return true;
+    }
+    return elementMatchesAnySelector(node, selectors);
+  };
+  const refreshAccessibleDocuments = () => {
+    const documents = [];
+    const visited = /* @__PURE__ */ new Set();
+    const queue = [document];
+    while (queue.length) {
+      const currentDocument = queue.shift();
+      if (!currentDocument || visited.has(currentDocument) || !currentDocument.documentElement) {
+        continue;
+      }
+      visited.add(currentDocument);
+      documents.push(currentDocument);
+      currentDocument.querySelectorAll("iframe").forEach((iframeElement) => {
+        try {
+          if (!iframeElement[IFRAME_REFRESH_BIND_KEY]) {
+            iframeElement[IFRAME_REFRESH_BIND_KEY] = true;
+            iframeElement.addEventListener("load", () => {
+              scheduleAccessibleDocumentRefresh(120);
+            });
+          }
+          const iframeDocument = iframeElement.contentDocument;
+          if (iframeDocument && iframeDocument.documentElement) {
+            queue.push(iframeDocument);
+          }
+        } catch (_error) {
+        }
+      });
+    }
+    runtimeState.accessibleDocuments = documents;
+    runtimeState.accessibleDocumentsUpdatedAt = Date.now();
+    return documents;
+  };
+  const scheduleAccessibleDocumentRefresh = (delay = 120) => {
+    scheduleRuntimeTimer("accessibleDocumentRefreshTimer", () => {
+      refreshAccessibleDocuments();
+    }, delay);
+  };
   const isPasteRelevantDocument = (targetDocument) => {
     if (!targetDocument) {
       return false;
@@ -4991,28 +5081,11 @@
     } catch (_error) {
     }
   };
-  const getAccessibleDocuments = () => {
-    const documents = [];
-    const visited = /* @__PURE__ */ new Set();
-    const queue = [document];
-    while (queue.length) {
-      const currentDocument = queue.shift();
-      if (!currentDocument || visited.has(currentDocument)) {
-        continue;
-      }
-      visited.add(currentDocument);
-      documents.push(currentDocument);
-      currentDocument.querySelectorAll("iframe").forEach((iframeElement) => {
-        try {
-          const iframeDocument = iframeElement.contentDocument;
-          if (iframeDocument && iframeDocument.documentElement) {
-            queue.push(iframeDocument);
-          }
-        } catch (_error) {
-        }
-      });
+  const getAccessibleDocuments = ({ force = false } = {}) => {
+    if (!force && runtimeState.accessibleDocuments.length && Date.now() - runtimeState.accessibleDocumentsUpdatedAt < SCRIPT_LIMITS.accessibleDocumentCacheMs) {
+      return runtimeState.accessibleDocuments.filter((targetDocument) => !!targetDocument?.documentElement);
     }
-    return documents;
+    return refreshAccessibleDocuments();
   };
   const startPasteUnlockWatcher = () => {
     if (runtimeState.pasteWatcherStarted) {
@@ -5022,8 +5095,34 @@
     const unlockAllDocuments = () => {
       getAccessibleDocuments().forEach((targetDocument) => unlockPasteForDocument(targetDocument));
     };
+    const schedulePasteUnlock = (delay = 120) => {
+      scheduleRuntimeTimer("pasteUnlockTimer", () => {
+        unlockAllDocuments();
+      }, delay);
+    };
     unlockAllDocuments();
-    setInterval(unlockAllDocuments, 1500);
+    if (!runtimeState.pasteMutationWatcherStarted && document.documentElement) {
+      runtimeState.pasteMutationWatcherStarted = true;
+      runtimeState.pasteMutationObserver = new MutationObserver((mutationList) => {
+        const shouldRefresh = mutationList.some((mutation) => {
+          if (mutation.type !== "childList") {
+            return false;
+          }
+          return Array.from(mutation.addedNodes).some((node) => isRelevantMutationNode(node, ["textarea", "input", "[contenteditable]", "iframe", "body"]));
+        });
+        if (shouldRefresh) {
+          scheduleAccessibleDocumentRefresh();
+          schedulePasteUnlock();
+        }
+      });
+      runtimeState.pasteMutationObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true
+      });
+    }
+    setInterval(() => {
+      unlockAllDocuments();
+    }, SCRIPT_LIMITS.pasteUnlockInterval);
   };
   const preventScreenCheck = () => {
     if (runtimeState.yktScreenCheckPrevented) {
@@ -5188,17 +5287,24 @@
   const yktPoll = (checker, { interval = 1e3, timeout = 2e4 } = {}) => {
     return new Promise((resolve) => {
       const startTime = Date.now();
-      const timer = setInterval(() => {
-        if (checker()) {
-          clearInterval(timer);
+      const runCheck = () => {
+        let passed = false;
+        try {
+          passed = !!checker();
+        } catch (_error) {
+          passed = false;
+        }
+        if (passed) {
           resolve(true);
           return;
         }
         if (Date.now() - startTime > timeout) {
-          clearInterval(timer);
           resolve(false);
+          return;
         }
-      }, interval);
+        setTimeout(runCheck, interval);
+      };
+      runCheck();
     });
   };
   const yktIsProgressDone = (text) => {
@@ -5466,10 +5572,20 @@
     }
     return Math.max(duration * 3e3, 1e4);
   };
-  const setYktPlaybackRate = (targetDocument = document, rate = getYktPlaybackRate()) => {
+  const syncYktControlPanel = (targetDocument = document, rate = getYktPlaybackRate()) => {
+    const root = targetDocument.documentElement;
+    if (!root) {
+      return;
+    }
+    const now = Date.now();
+    const lastSyncAt = root.__xuexutongUiSyncAt || 0;
+    const lastRate = root.__xuexutongUiRate;
+    if (now - lastSyncAt < SCRIPT_LIMITS.yktUiSyncInterval && lastRate === rate && root.__xuexutongUiMuted) {
+      return;
+    }
     const speedButton = targetDocument.querySelector("xt-speedlist xt-button") || targetDocument.getElementsByTagName("xt-speedlist")[0]?.firstElementChild?.firstElementChild;
     const speedWrap = targetDocument.getElementsByTagName("xt-speedbutton")[0];
-    if (speedButton && speedWrap && !speedButton.__xuexutongRateApplied) {
+    if (speedButton && speedWrap && lastRate !== rate) {
       speedButton.setAttribute("data-speed", rate);
       speedButton.setAttribute("keyt", `${rate}.00`);
       speedButton.innerText = `${rate}.00X`;
@@ -5480,38 +5596,49 @@
         view: _unsafeWindow || window
       }));
       speedButton.click();
-      speedButton.__xuexutongRateApplied = true;
     }
+    const muteButton = targetDocument.querySelector("#video-box xt-volumebutton xt-icon, .xt_video_player_common_icon");
+    if (muteButton && !root.__xuexutongUiMuted) {
+      muteButton.click();
+      root.__xuexutongUiMuted = true;
+    }
+    root.__xuexutongUiRate = rate;
+    root.__xuexutongUiSyncAt = now;
+  };
+  const setYktPlaybackRate = (targetDocument = document, rate = getYktPlaybackRate()) => {
+    syncYktControlPanel(targetDocument, rate);
     targetDocument.querySelectorAll("video, audio").forEach((media) => {
-      media.playbackRate = rate;
+      if (Math.abs((Number(media.playbackRate) || 0) - rate) > 0.01) {
+        media.playbackRate = rate;
+      }
     });
   };
   const muteYktMedia = (targetDocument = document) => {
-    const muteButton = targetDocument.querySelector("#video-box xt-volumebutton xt-icon, .xt_video_player_common_icon");
-    if (muteButton && !muteButton.__xuexutongMuted) {
-      muteButton.click();
-      muteButton.__xuexutongMuted = true;
-    }
+    syncYktControlPanel(targetDocument);
     targetDocument.querySelectorAll("video, audio").forEach((media) => {
-      media.muted = true;
-      media.volume = 0;
+      if (!media.muted || media.volume !== 0) {
+        media.muted = true;
+        media.volume = 0;
+      }
     });
   };
   const applyYktMediaDefaults = (media, targetDocument = document) => {
     if (!media) {
       return;
     }
+    const rate = getYktPlaybackRate();
     try {
       media.autoplay = true;
       media.defaultMuted = true;
       media.playsInline = true;
       media.muted = true;
       media.volume = 0;
-      media.playbackRate = getYktPlaybackRate();
+      if (Math.abs((Number(media.playbackRate) || 0) - rate) > 0.01) {
+        media.playbackRate = rate;
+      }
     } catch (_error) {
     }
-    setYktPlaybackRate(targetDocument);
-    muteYktMedia(targetDocument);
+    syncYktControlPanel(targetDocument, rate);
     try {
       media.play().catch(() => {
       });
@@ -5570,8 +5697,42 @@
         scanYktMediaDocuments();
       }
     };
+    const scheduleBackgroundSync = (delay = SCRIPT_LIMITS.observerDebounceMs) => {
+      scheduleRuntimeTimer("yktBackgroundSyncTimer", () => {
+        syncMedia();
+      }, delay);
+    };
     syncMedia();
-    setInterval(syncMedia, 2500);
+    if (!runtimeState.yktBackgroundMutationWatcherStarted && document.documentElement) {
+      runtimeState.yktBackgroundMutationWatcherStarted = true;
+      runtimeState.yktBackgroundMutationObserver = new MutationObserver((mutationList) => {
+        const shouldSync = mutationList.some((mutation) => {
+          if (mutation.type !== "childList") {
+            return false;
+          }
+          return Array.from(mutation.addedNodes).some((node) => isRelevantMutationNode(node, ["video", "audio", "iframe", ".progress-wrap", ".dialog-header", ".header-bar", ".video-box", ".swiper-wrapper", "[class*='player']", "[class*='video']"]));
+        });
+        if (shouldSync) {
+          scheduleAccessibleDocumentRefresh();
+          scheduleBackgroundSync();
+        }
+      });
+      runtimeState.yktBackgroundMutationObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true
+      });
+    }
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        scheduleBackgroundSync(80);
+      }
+    });
+    window.addEventListener("focus", () => {
+      scheduleBackgroundSync(80);
+    });
+    setInterval(() => {
+      syncMedia();
+    }, SCRIPT_LIMITS.yktBackgroundInterval);
   };
   const keepYktMediaPlaying = (media, targetDocument = document) => {
     if (!media) {
@@ -6305,7 +6466,7 @@
           runtimeState.routeEvaluationTimer = 0;
           executeLogicByUrl(window.location.href, force);
           emit("customEvent", isShow.value);
-        }, force ? 0 : 240);
+        }, force ? 0 : SCRIPT_LIMITS.observerDebounceMs);
       };
       const startRouteWatcher = () => {
         if (runtimeState.routeWatcherStarted) {
@@ -6331,8 +6492,27 @@
         });
         if (!runtimeState.routeMutationWatcherStarted && document.documentElement) {
           runtimeState.routeMutationWatcherStarted = true;
-          runtimeState.routeMutationObserver = new MutationObserver(() => {
-            if (allowFrameRuntime || isLikelyYktPage(window.location.href) || window.location.href.includes("chaoxing")) {
+          runtimeState.routeMutationObserver = new MutationObserver((mutationList) => {
+            const shouldSync = mutationList.some((mutation) => {
+              if (mutation.type !== "childList") {
+                return false;
+              }
+              return Array.from(mutation.addedNodes).some((node) => isRelevantMutationNode(node, [
+                "iframe",
+                "video",
+                "audio",
+                ".ans-job-icon",
+                ".header-bar",
+                ".dialog-header",
+                ".logs-list",
+                ".leaf_list__wrap",
+                ".btn-next",
+                ".video-box",
+                ".swiper-wrapper",
+                "#prevNextFocusNext"
+              ]));
+            });
+            if (shouldSync && (allowFrameRuntime || isLikelyYktPage(window.location.href) || window.location.href.includes("chaoxing"))) {
               scheduleRouteSync();
             }
           });
