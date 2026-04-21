@@ -29,7 +29,6 @@
 // @grant        GM_info
 // @grant        GM_setValue
 // @grant        unsafeWindow
-// @noframes
 // @run-at       document-start
 // ==/UserScript==
 
@@ -45,7 +44,14 @@
       return true;
     }
   })();
-  if (!isTopWindow) {
+  const allowFrameRuntime = (() => {
+    try {
+      return /(yuketang\.cn|gdufemooc\.cn|nbdlib\.cn|hnsyu\.net|gdhkmooc\.com|\/v2\/web|\/pro\/lms|\/web|\/course|\/lesson)/i.test(location.href);
+    } catch (_error) {
+      return false;
+    }
+  })();
+  if (!isTopWindow && !allowFrameRuntime) {
     return;
   }
 
