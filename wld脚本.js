@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         wld脚本｜学习通｜雨课堂网课助手
 // @namespace    wld-script
-// @version      0.2.4
+// @version      0.2.5
 // @author       WLD
 // @description  wld脚本（WLD维护版）：支持学习通与雨课堂的视频/音频自动播放、PPT/文档/电子书自动阅读、任务点/章节自动跳转，以及作业/考试页面允许粘贴；自动查题、自动答题、AI/OCR 与外接题库能力已全部移除。致谢原作者 isMobile，并感谢雨课堂参考作者风之子与允许粘贴脚本作者 PY-DNG。
 // @icon         https://vitejs.dev/logo.svg
@@ -178,7 +178,9 @@
     errorHooked: false,
     webpackHooked: false,
     pasteWatcherStarted: false,
-    yktScreenCheckPrevented: false
+    yktScreenCheckPrevented: false,
+    routeWatcherStarted: false,
+    currentRouteLogicKey: ""
   });
   const getScriptInfo = () => {
     return {
@@ -5027,6 +5029,50 @@
     delete progressMap[key];
     writeYktProgressMap(progressMap);
   };
+  const getSelectorList = (selectors) => Array.isArray(selectors) ? selectors : [selectors];
+  const queryFirst = (selectors, root = document) => {
+    if (!(root == null ? void 0 : root.querySelector)) {
+      return null;
+    }
+    for (const selector of getSelectorList(selectors)) {
+      try {
+        const target = root.querySelector(selector);
+        if (target) {
+          return target;
+        }
+      } catch (_error) {
+      }
+    }
+    return null;
+  };
+  const queryAll = (selectors, root = document) => {
+    if (!(root == null ? void 0 : root.querySelectorAll)) {
+      return [];
+    }
+    for (const selector of getSelectorList(selectors)) {
+      try {
+        const targets = Array.from(root.querySelectorAll(selector));
+        if (targets.length) {
+          return targets;
+        }
+      } catch (_error) {
+      }
+    }
+    return [];
+  };
+  const isElementVisible = (element) => {
+    if (!element) {
+      return false;
+    }
+    try {
+      const style = window.getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" && element.getClientRects().length > 0;
+    } catch (_error) {
+      return true;
+    }
+  };
+  const getVisibleElements = (elements) => elements.filter((element) => isElementVisible(element));
+  const queryFirstVisible = (selectors, root = document) => getVisibleElements(queryAll(selectors, root))[0] || null;
   const yktPoll = (checker, { interval = 1e3, timeout = 2e4 } = {}) => {
     return new Promise((resolve) => {
       const startTime = Date.now();
@@ -5050,10 +5096,122 @@
     return text.includes("100%") || text.includes("99%") || text.includes("98%") || text.includes("已完成") || text.includes("已读");
   };
   const yktScrollToBottom = (selector) => {
-    const element = document.querySelector(selector);
+    const element = queryFirst(selector);
     if (element) {
       element.scrollTop = element.scrollHeight;
     }
+  };
+  const waitForSelector = async (selectors, { timeout = 15e3, interval = 500, root = document } = {}) => {
+    await yktPoll(() => !!queryFirst(selectors, root), { interval, timeout });
+    return queryFirst(selectors, root);
+  };
+  const clickElementLikeUser = (element) => {
+    if (!element) {
+      return false;
+    }
+    try {
+      element.dispatchEvent(new MouseEvent("mousemove", {
+        bubbles: true,
+        clientX: 9999,
+        clientY: 9999,
+        view: _unsafeWindow || window
+      }));
+      element.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        clientX: 9999,
+        clientY: 9999,
+        view: _unsafeWindow || window
+      }));
+      element.dispatchEvent(new MouseEvent("mouseup", {
+        bubbles: true,
+        clientX: 9999,
+        clientY: 9999,
+        view: _unsafeWindow || window
+      }));
+    } catch (_error) {
+    }
+    try {
+      element.click();
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  };
+  const getYktTaskMeta = (element) => {
+    const title = queryFirst(["h2", ".title", ".header-bar"], element)?.innerText?.trim() || "";
+    const tagText = queryFirst([".tag"], element)?.innerText?.trim() || "";
+    const tagHref = queryFirst([".tag use", "use"], element)?.getAttribute("xlink:href") || queryFirst([".tag use", "use"], element)?.getAttribute("href") || "";
+    const raw = [title, tagText, tagHref, element == null ? void 0 : element.className].filter(Boolean).join(" ").toLowerCase();
+    let type = "unknown";
+    if (raw.includes("音频") || raw.includes("audio")) {
+      type = "audio";
+    } else if (raw.includes("shipin") || raw.includes("视频") || raw.includes("video")) {
+      type = "video";
+    } else if (raw.includes("piliang") || raw.includes("批量")) {
+      type = "batch";
+    } else if (raw.includes("kejian") || raw.includes("课件") || raw.includes("ppt")) {
+      type = "courseware";
+    } else if (raw.includes("tuwen") || raw.includes("图文") || raw.includes("阅读") || raw.includes("文档")) {
+      type = "reading";
+    } else if (raw.includes("taolun") || raw.includes("讨论")) {
+      type = "discussion";
+    } else if (raw.includes("zuoye") || raw.includes("作业")) {
+      type = "homework";
+    } else if (raw.includes("kaoshi") || raw.includes("考试")) {
+      type = "exam";
+    } else if (raw.includes("ketang") || raw.includes("课堂")) {
+      type = "classroom";
+    }
+    return {
+      type,
+      title: title || tagText || "未命名任务",
+      raw,
+      tagText,
+      tagHref
+    };
+  };
+  const getYktV2CourseItems = () => {
+    const listRoot = queryFirst([".logs-list", ".logsList", ".logs_list"]);
+    if (!listRoot) {
+      return [];
+    }
+    return getVisibleElements(Array.from(listRoot.children)).filter((item) => !!queryFirst([".content-box section", ".content-box", "section", ".tag"], item));
+  };
+  const getYktBatchActivities = (course) => {
+    const scopedRoot = course?.parentElement?.parentElement || course?.parentElement || course;
+    const scopedActivities = queryAll([".leaf_list__wrap .activity__wrap"], scopedRoot);
+    if (scopedActivities.length) {
+      return scopedActivities;
+    }
+    const wraps = getVisibleElements(Array.from(document.querySelectorAll(".leaf_list__wrap")));
+    if (!wraps.length) {
+      return [];
+    }
+    wraps.sort((left, right) => right.querySelectorAll(".activity__wrap").length - left.querySelectorAll(".activity__wrap").length);
+    return Array.from(wraps[0].querySelectorAll(".activity__wrap"));
+  };
+  const getYktProNextButton = () => queryFirstVisible([".btn-next"]);
+  const getYktProLessonNodes = () => getVisibleElements(Array.from(document.querySelectorAll(".leaf-detail")));
+  const getYktProStatusText = () => {
+    const statusContainer = queryFirst(["section.title", ".title"]);
+    return statusContainer?.lastElementChild?.innerText || statusContainer?.innerText || "";
+  };
+  const leaveYktTaskView = async ({ waitSelectors = [".logs-list"], previousUrl = location.href, delay = 1500 } = {}) => {
+    const backButton = queryFirstVisible([
+      ".header-bar .left-btn",
+      ".header-bar .btn-back",
+      ".header-bar .back-btn",
+      ".dialog-header .el-icon-close",
+      ".el-dialog__headerbtn"
+    ]);
+    if (!clickElementLikeUser(backButton)) {
+      history.back();
+    }
+    await sleepMs(delay);
+    await yktPoll(() => !!queryFirst(waitSelectors) || location.href !== previousUrl, {
+      interval: 500,
+      timeout: 1e4
+    });
   };
   const waitForYktMedia = async (targetDocument = document, timeout = 15e3) => {
     await yktPoll(() => !!targetDocument.querySelector("video, audio"), {
@@ -5156,14 +5314,10 @@
     };
   };
   const goBackAfterYktTask = async (selector = ".logs-list", delay = 1500) => {
-    history.back();
-    await sleepMs(delay);
-    if (selector) {
-      await yktPoll(() => !!document.querySelector(selector), {
-        interval: 500,
-        timeout: 1e4
-      });
-    }
+    await leaveYktTaskView({
+      waitSelectors: selector ? [selector] : [],
+      delay
+    });
   };
   const useYktV2Logic = async () => {
     const logStore = useLogStore();
@@ -5199,9 +5353,29 @@
       logStore.addLog(`${taskTitle} 已处理完成`, "success");
       await goBackAfterYktTask(backSelector);
     };
+    const handleYktStandaloneRead = async (course, taskTitle) => {
+      const previousUrl = location.href;
+      clickElementLikeUser(course);
+      await waitForSelector([".title", ".dialog-header", ".el-card__body", "section.title"], { timeout: 12e3 });
+      await sleepMs(1200);
+      window.scrollTo(0, document.body.scrollHeight);
+      await sleepMs(1500);
+      window.scrollTo(0, 0);
+      logStore.addLog(`${taskTitle} 已处理完成`, "success");
+      updateProgress(outside + 1, 0);
+      await leaveYktTaskView({
+        waitSelectors: [".logs-list"],
+        previousUrl
+      });
+    };
     const handleYktSingleVideo = async (course) => {
-      course.click();
-      await sleepMs(3e3);
+      const previousUrl = location.href;
+      clickElementLikeUser(course);
+      await yktPoll(() => location.href !== previousUrl || !!queryFirst([".progress-wrap .text", "video", "audio", ".title"]), {
+        interval: 500,
+        timeout: 12e3
+      });
+      await sleepMs(1500);
       const title = document.querySelector(".title")?.innerText || "视频";
       const deadlinePassed = document.querySelector(".box")?.innerText.includes("已过考核截止时间");
       if (deadlinePassed) {
@@ -5210,28 +5384,42 @@
         await handleYktMediaTask(title);
       }
       updateProgress(outside + 1, 0);
-      await goBackAfterYktTask();
+      await leaveYktTaskView({
+        waitSelectors: [".logs-list"],
+        previousUrl
+      });
     };
     const handleYktAudioItem = async (item, title, index) => {
-      item.click();
-      await sleepMs(2500);
+      const previousUrl = location.href;
+      clickElementLikeUser(item);
+      await waitForSelector([".progress-wrap .text", "audio", "video"], { timeout: 12e3 });
+      await sleepMs(1500);
       await handleYktMediaTask(title);
       updateProgress(outside, index + 1);
-      await goBackAfterYktTask(".leaf_list__wrap");
+      await leaveYktTaskView({
+        waitSelectors: [".leaf_list__wrap", ".logs-list"],
+        previousUrl
+      });
       return index + 1;
     };
     const handleYktVideoItem = async (item, title, index) => {
-      item.click();
-      await sleepMs(2500);
+      const previousUrl = location.href;
+      clickElementLikeUser(item);
+      await waitForSelector([".progress-wrap .text", "video", "audio"], { timeout: 12e3 });
+      await sleepMs(1500);
       await handleYktMediaTask(title);
       updateProgress(outside, index + 1);
-      await goBackAfterYktTask(".leaf_list__wrap");
+      await leaveYktTaskView({
+        waitSelectors: [".leaf_list__wrap", ".logs-list"],
+        previousUrl
+      });
       return index + 1;
     };
     const handleYktReadingItem = async (item, title, typeText, index) => {
       logStore.addLog(`开始处理${typeText}：${title}`, "primary");
-      item.click();
-      await sleepMs(1500);
+      clickElementLikeUser(item);
+      await waitForSelector([".title", ".dialog-header", ".el-card__header", "section.title"], { timeout: 1e4 });
+      await sleepMs(1200);
       await handleYktSimpleRead(title, ".leaf_list__wrap");
       updateProgress(outside, index + 1);
       return index + 1;
@@ -5243,14 +5431,16 @@
       return index + 1;
     };
     const handleYktCourseware = async (course) => {
-      course.click();
-      await sleepMs(3e3);
+      const previousUrl = location.href;
+      clickElementLikeUser(course);
+      await waitForSelector([".dialog-header", ".swiper-wrapper", ".video-box", ".el-card__header"], { timeout: 12e3 });
+      await sleepMs(1200);
       const className = document.querySelector(".dialog-header")?.firstElementChild?.innerText || course.querySelector("h2")?.innerText || "课件";
       const slides = Array.from(document.querySelector(".swiper-wrapper")?.children || []);
       if (slides.length) {
         logStore.addLog(`开始阅读 PPT：${className}`, "primary");
         for (const [index, slide] of slides.entries()) {
-          slide.click();
+          clickElementLikeUser(slide);
           logStore.addLog(`${className}：第 ${index + 1 } 张`, "primary");
           await sleepMs(getYktPptIntervalMs());
         }
@@ -5267,7 +5457,7 @@
             logStore.addLog(`第 ${index + 1} 个课件视频已完成，跳过`, "success");
             continue;
           }
-          videoBox.click();
+          clickElementLikeUser(videoBox);
           await sleepMs(2e3);
           const media = await waitForYktMedia(document);
           const stopKeepingAlive = keepYktMediaPlaying(media, document);
@@ -5283,11 +5473,16 @@
       }
       logStore.addLog(`${className} 已处理完成`, "success");
       updateProgress(outside + 1, 0);
-      await goBackAfterYktTask();
+      await leaveYktTaskView({
+        waitSelectors: [".logs-list"],
+        previousUrl
+      });
     };
     const handleYktClassroom = async (course) => {
-      course.click();
-      await sleepMs(5e3);
+      const previousUrl = location.href;
+      clickElementLikeUser(course);
+      await waitForSelector(["iframe.lesson-report-mobile", "video", "audio", ".title"], { timeout: 15e3 });
+      await sleepMs(2e3);
       const classroomIframe = document.querySelector("iframe.lesson-report-mobile");
       const targetDocument = classroomIframe?.contentDocument || document;
       const media = await waitForYktMedia(targetDocument, 1e4);
@@ -5305,20 +5500,27 @@
         logStore.addLog("未找到课堂媒体，按已处理跳过", "warning");
       }
       updateProgress(outside + 1, 0);
-      await goBackAfterYktTask();
+      await leaveYktTaskView({
+        waitSelectors: [".logs-list"],
+        previousUrl
+      });
     };
     const handleYktBatch = async (course) => {
-      const expandButton = course.querySelector(".sub-info .gray span");
+      const expandButton = queryFirst([".sub-info .gray span", ".sub-info .gray", ".sub-info span"], course);
       if (!expandButton) {
         logStore.addLog("未找到批量任务展开按钮，跳过当前任务", "warning");
         updateProgress(outside + 1, 0);
         return;
       }
-      expandButton.click();
-      await sleepMs(1200);
+      clickElementLikeUser(expandButton);
+      await yktPoll(() => getYktBatchActivities(course).length > 0, {
+        interval: 500,
+        timeout: 8e3
+      });
+      await sleepMs(800);
       let currentIndex = inside;
       while (true) {
-        const activities = Array.from(document.querySelectorAll(".leaf_list__wrap .activity__wrap"));
+        const activities = getYktBatchActivities(course);
         if (currentIndex >= activities.length) {
           break;
         }
@@ -5326,23 +5528,21 @@
         if (!item) {
           break;
         }
-        const title = item.querySelector("h2")?.innerText || `第${currentIndex + 1}项`;
-        const tagText = item.querySelector(".tag")?.innerText.trim() || "";
-        const tagHref = item.querySelector(".tag use")?.getAttribute("xlink:href") || "";
-        if (tagText === "音频") {
-          currentIndex = await handleYktAudioItem(item, title, currentIndex);
-        } else if (tagHref.includes("shipin")) {
-          currentIndex = await handleYktVideoItem(item, title, currentIndex);
-        } else if (tagHref.includes("tuwen")) {
-          currentIndex = await handleYktReadingItem(item, title, "图文", currentIndex);
-        } else if (tagHref.includes("taolun")) {
-          currentIndex = await handleYktReadingItem(item, title, "讨论", currentIndex);
-        } else if (tagHref.includes("zuoye")) {
-          currentIndex = await skipYktTaskItem(title, "作业", currentIndex);
-        } else if (tagHref.includes("kaoshi")) {
-          currentIndex = await skipYktTaskItem(title, "考试", currentIndex);
+        const taskMeta = getYktTaskMeta(item);
+        if (taskMeta.type === "audio") {
+          currentIndex = await handleYktAudioItem(item, taskMeta.title, currentIndex);
+        } else if (taskMeta.type === "video") {
+          currentIndex = await handleYktVideoItem(item, taskMeta.title, currentIndex);
+        } else if (taskMeta.type === "reading") {
+          currentIndex = await handleYktReadingItem(item, taskMeta.title, "图文", currentIndex);
+        } else if (taskMeta.type === "discussion") {
+          currentIndex = await handleYktReadingItem(item, taskMeta.title, "讨论", currentIndex);
+        } else if (taskMeta.type === "homework") {
+          currentIndex = await skipYktTaskItem(taskMeta.title, "作业", currentIndex);
+        } else if (taskMeta.type === "exam") {
+          currentIndex = await skipYktTaskItem(taskMeta.title, "考试", currentIndex);
         } else {
-          logStore.addLog(`未识别的批量任务，已跳过：${title}`, "warning");
+          logStore.addLog(`未识别的批量任务，已跳过：${taskMeta.title}`, "warning");
           currentIndex += 1;
           updateProgress(outside, currentIndex);
         }
@@ -5352,14 +5552,18 @@
     };
     logStore.addLog("检测到雨课堂 v2 页面，开始准备刷课", "primary");
     while (true) {
-      const courseList = Array.from(document.querySelector(".logs-list")?.children || []);
+      await yktPoll(() => getYktV2CourseItems().length > 0, {
+        interval: 800,
+        timeout: 2e4
+      });
+      const courseList = getYktV2CourseItems();
       if (!courseList.length) {
         logStore.addLog("未找到雨课堂课程列表，请进入课程目录页面使用", "danger");
         return;
       }
       const loadFrequency = Math.floor((outside + 1) / 20) + 1;
       for (let index = 0; index < loadFrequency; index++) {
-        yktScrollToBottom(".viewContainer");
+        yktScrollToBottom([".viewContainer", ".el-scrollbar__wrap", ".logs-list"]);
         await sleepMs(800);
       }
       if (outside >= courseList.length) {
@@ -5367,28 +5571,31 @@
         logStore.addLog("雨课堂课程已全部处理完成", "success");
         return;
       }
-      const course = courseList[outside]?.querySelector(".content-box section");
+      const course = queryFirst([".content-box section", ".content-box", "section"], courseList[outside]);
       if (!course) {
         logStore.addLog("未找到当前课程节点，已自动跳过", "warning");
         updateProgress(outside + 1, 0);
         continue;
       }
-      const taskType = course.querySelector(".tag use")?.getAttribute("xlink:href") || "unknown";
-      logStore.addLog(`雨课堂正在处理第 ${outside + 1}/${courseList.length} 个任务`, "primary");
-      if (taskType.includes("shipin")) {
+      const taskMeta = getYktTaskMeta(course);
+      logStore.addLog(`雨课堂正在处理第 ${outside + 1}/${courseList.length} 个任务：${taskMeta.title}`, "primary");
+      if (taskMeta.type === "video" || taskMeta.type === "audio") {
         await handleYktSingleVideo(course);
-      } else if (taskType.includes("piliang")) {
+      } else if (taskMeta.type === "batch") {
         await handleYktBatch(course);
-      } else if (taskType.includes("ketang")) {
+      } else if (taskMeta.type === "classroom") {
         await handleYktClassroom(course);
-      } else if (taskType.includes("kejian")) {
+      } else if (taskMeta.type === "courseware" || taskMeta.type === "reading") {
         await handleYktCourseware(course);
-      } else if (taskType.includes("zuoye")) {
+      } else if (taskMeta.type === "homework") {
         logStore.addLog("雨课堂作业不自动作答，已跳过当前任务", "warning");
         updateProgress(outside + 1, 0);
-      } else if (taskType.includes("kaoshi")) {
+      } else if (taskMeta.type === "exam") {
         logStore.addLog("雨课堂考试不自动作答，已跳过当前任务", "warning");
         updateProgress(outside + 1, 0);
+      } else if (taskMeta.type === "discussion") {
+        logStore.addLog("雨课堂讨论任务按阅读模式处理后跳过", "warning");
+        await handleYktStandaloneRead(course, taskMeta.title);
       } else {
         logStore.addLog("未识别的雨课堂任务类型，已跳过", "warning");
         updateProgress(outside + 1, 0);
@@ -5402,19 +5609,19 @@
     const progressKey = getYktProgressKey();
     let classCount = Math.max(getYktProgress(progressKey).outside || 1, 1);
     const tryOpenLegacyYktLesson = async () => {
-      const lessonNodes = Array.from(document.querySelectorAll(".leaf-detail"));
+      const lessonNodes = getYktProLessonNodes();
       if (!lessonNodes.length) {
         return false;
       }
       let currentIndex = Math.max(classCount - 1, 0);
-      while (lessonNodes[currentIndex] && !lessonNodes[currentIndex].firstChild?.querySelector("i")?.className.includes("shipin")) {
+      while (lessonNodes[currentIndex] && yktIsProgressDone(lessonNodes[currentIndex].innerText || "")) {
         currentIndex += 1;
       }
       const targetLesson = lessonNodes[currentIndex];
       if (!targetLesson) {
         return false;
       }
-      targetLesson.click();
+      clickElementLikeUser(targetLesson);
       classCount = currentIndex + 1;
       setYktProgress(progressKey, classCount, 0);
       logStore.addLog(`已打开雨课堂旧版第 ${classCount} 个任务`, "primary");
@@ -5423,7 +5630,11 @@
     };
     logStore.addLog("检测到雨课堂 pro/lms 页面，开始准备刷课", "primary");
     while (true) {
-      if (!document.querySelector(".btn-next")) {
+      await yktPoll(() => !!getYktProNextButton() || getYktProLessonNodes().length > 0 || !!queryFirst([".header-bar", "section.title"]), {
+        interval: 500,
+        timeout: 15e3
+      });
+      if (!getYktProNextButton()) {
         const opened = await tryOpenLegacyYktLesson();
         if (!opened) {
           logStore.addLog("未找到雨课堂新版下一项按钮，请进入具体课程内容页再使用", "danger");
@@ -5431,22 +5642,22 @@
         }
       }
       await sleepMs(2e3);
-      const headerNode = document.querySelector(".header-bar")?.firstElementChild;
-      const className = headerNode?.innerText || `第 ${classCount} 项`;
-      const classType = headerNode?.firstElementChild?.getAttribute("class") || "";
-      const classStatus = document.querySelector("#app > div.app_index-wrapper > div.wrap > div.viewContainer.heightAbsolutely > div > div > div > div > section.title")?.lastElementChild?.innerText || "";
-      if (classType.includes("tuwen") && !classStatus.includes("已读")) {
+      const headerNode = queryFirst([".header-bar > *", ".header-bar"]);
+      const taskMeta = getYktTaskMeta(headerNode || document.body);
+      const className = taskMeta.title || `第 ${classCount} 项`;
+      const classStatus = getYktProStatusText();
+      if (["reading", "courseware", "discussion"].includes(taskMeta.type) && !yktIsProgressDone(classStatus)) {
         logStore.addLog(`正在阅读：${className}`, "primary");
         window.scrollTo(0, document.body.scrollHeight);
         await sleepMs(1500);
         window.scrollTo(0, 0);
-      } else if (classType.includes("shipin") && !yktIsProgressDone(classStatus)) {
+      } else if ((["video", "audio"].includes(taskMeta.type) || !!queryFirst(["video", "audio"])) && !yktIsProgressDone(classStatus)) {
         logStore.addLog(`正在播放：${className}`, "primary");
         const media = await waitForYktMedia(document);
         const stopKeepingAlive = keepYktMediaPlaying(media, document);
         try {
           await yktPoll(() => {
-            const statusText = document.querySelector("#app > div.app_index-wrapper > div.wrap > div.viewContainer.heightAbsolutely > div > div > div > div > section.title")?.lastElementChild?.innerText || "";
+            const statusText = getYktProStatusText();
             return yktIsProgressDone(statusText) || isYktMediaEnded(media);
           }, {
             interval: 1e3,
@@ -5455,17 +5666,17 @@
         } finally {
           stopKeepingAlive();
         }
-      } else if (classType.includes("zuoye")) {
+      } else if (taskMeta.type === "homework") {
         logStore.addLog(`进入作业：${className}，不自动答题，已跳过`, "warning");
         await sleepMs(1200);
-      } else if (classType.includes("kaoshi")) {
+      } else if (taskMeta.type === "exam") {
         logStore.addLog(`进入考试：${className}，不自动答题，已跳过`, "warning");
         await sleepMs(1200);
-      } else if (classType.includes("ketang")) {
+      } else if (taskMeta.type === "classroom") {
         logStore.addLog(`进入课堂：${className}，无自动功能，已跳过`, "warning");
         await sleepMs(1200);
-      } else if (classType.includes("taolun")) {
-        logStore.addLog(`进入讨论：${className}，已跳过`, "warning");
+      } else if (taskMeta.type === "discussion") {
+        logStore.addLog(`进入讨论：${className}，按阅读流程处理后跳过`, "warning");
         await sleepMs(1200);
       } else {
         logStore.addLog(`已处理：${className}`, "success");
@@ -5473,30 +5684,31 @@
       }
       classCount += 1;
       setYktProgress(progressKey, classCount, 0);
-      const nextButton = document.querySelector(".btn-next");
+      const nextButton = getYktProNextButton();
       if (!nextButton) {
         clearYktProgress(progressKey);
         logStore.addLog("雨课堂课程已全部处理完成", "success");
         return;
       }
-      nextButton.dispatchEvent(new MouseEvent("mousemove", {
-        bubbles: true,
-        clientX: 9999,
-        clientY: 9999,
-        view: _unsafeWindow || window
-      }));
-      nextButton.dispatchEvent(new Event("click"));
+      clickElementLikeUser(nextButton);
       await sleepMs(4e3);
     }
   };
-  const useCxChapterLogic = () => {
+  const useGenericFrameCourseChapterLogic = ({
+    platformKey = "cx",
+    entryLabel = "章节学习页面",
+    readyUrlTransformer = null,
+    nextChapterSelector = "#prevNextFocusNext",
+    nextChapterAction = () => document.querySelector(".jb_btn.jb_btn_92.fr.fs14.nextChapter")?.click()
+  } = {}) => {
     const logStore = useLogStore();
     const init = () => {
       const currentUrl = window.location.href;
-      if (!currentUrl.includes("&mooc2=1")) {
-        window.location.href = currentUrl + "&mooc2=1";
+      const nextReadyUrl = typeof readyUrlTransformer === "function" ? readyUrlTransformer(currentUrl) : null;
+      if (nextReadyUrl && nextReadyUrl !== currentUrl) {
+        window.location.href = nextReadyUrl;
       }
-      logStore.addLog(`检测到用户进入到章节学习页面`, "primary");
+      logStore.addLog(`检测到用户进入到${entryLabel}`, "primary");
       logStore.addLog(`正在解析任务点，请稍等5-10秒（如果长时间没有反应，请刷新页面）`, "warning");
     };
     const configStore = useConfigStore();
@@ -5545,13 +5757,14 @@
               logStore.addLog(`检测到${taskState.skippedWorkCount}个未完成章节作业，已自动跳过并继续后续流程`, "warning");
             }
             logStore.addLog(`本页任务点已全部完成，正前往下一章节`, "success");
-            if (configStore.platformParams.cx.parts[0].params[0].value) {
-              const nextBtn = documentElement.querySelector("#prevNextFocusNext");
+            const isAutoNextEnabled = configStore.platformParams?.[platformKey]?.parts?.[0]?.params?.[0]?.value ?? true;
+            if (isAutoNextEnabled) {
+              const nextBtn = documentElement.querySelector(nextChapterSelector);
               if (!nextBtn || nextBtn.style.display === "none") {
                 logStore.addLog(`已经到达最后一章节，无法跳转`, "danger");
               } else {
                 await sleep(3);
-                document.querySelector(".jb_btn.jb_btn_92.fr.fs14.nextChapter").click();
+                nextChapterAction();
               }
             } else {
               logStore.addLog(`已经关闭自动下一章节，在设置里可更改`, "danger");
@@ -5704,6 +5917,13 @@
     processIframeTask();
     setupInterceptor();
   };
+  const useCxChapterLogic = () => useGenericFrameCourseChapterLogic({
+    platformKey: "cx",
+    entryLabel: "学习通章节学习页面",
+    readyUrlTransformer: (currentUrl) => currentUrl.includes("&mooc2=1") ? currentUrl : currentUrl + "&mooc2=1",
+    nextChapterSelector: "#prevNextFocusNext",
+    nextChapterAction: () => document.querySelector(".jb_btn.jb_btn_92.fr.fs14.nextChapter")?.click()
+  });
   const useCxWorkLogic = async () => {
     const logStore = useLogStore();
     decrypt(document);
@@ -5746,18 +5966,46 @@
           }
         }
       ];
-      const executeLogicByUrl = (url22) => {
-        for (const { keyword, logic } of urlLogicPairs) {
-          if (url22.includes(keyword)) {
-            logic();
-            isShow.value = true;
-            return;
+      const getMatchedLogicPair = (url22) => {
+        for (const routeItem of urlLogicPairs) {
+          if (url22.includes(routeItem.keyword)) {
+            return routeItem;
           }
+        }
+        return null;
+      };
+      const executeLogicByUrl = (url22, force = false) => {
+        const matchedPair = getMatchedLogicPair(url22);
+        const nextLogicKey = matchedPair?.keyword || "";
+        if (!force && runtimeState.currentRouteLogicKey === nextLogicKey) {
+          isShow.value = !!matchedPair;
+          return;
+        }
+        runtimeState.currentRouteLogicKey = nextLogicKey;
+        if (matchedPair) {
+          matchedPair.logic();
+          isShow.value = true;
+          return;
         }
         isShow.value = false;
       };
-      executeLogicByUrl(url2);
       const emit = __emit;
+      const startRouteWatcher = () => {
+        if (runtimeState.routeWatcherStarted) {
+          return;
+        }
+        runtimeState.routeWatcherStarted = true;
+        let currentUrl = window.location.href;
+        setInterval(() => {
+          if (currentUrl !== window.location.href) {
+            currentUrl = window.location.href;
+            executeLogicByUrl(currentUrl);
+            emit("customEvent", isShow.value);
+          }
+        }, 1e3);
+      };
+      executeLogicByUrl(url2, true);
+      startRouteWatcher();
       emit("customEvent", isShow.value);
       const tabs = [
         {
