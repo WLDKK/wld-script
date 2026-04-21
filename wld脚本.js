@@ -5,6 +5,7 @@
 // @author       WLD
 // @description  wld脚本（WLD维护版）：支持学习通与雨课堂的视频/音频自动播放、PPT/文档/电子书自动阅读、任务点/章节自动跳转，以及作业/考试页面允许粘贴；自动查题、自动答题、AI/OCR 与外接题库能力已全部移除。致谢原作者 isMobile，并感谢雨课堂参考作者风之子与允许粘贴脚本作者 PY-DNG。
 // @icon         https://vitejs.dev/logo.svg
+// @match        *://yuketang.cn/*
 // @match        *://*.chaoxing.com/*
 // @match        *://*.yuketang.cn/*
 // @match        *://*.gdufemooc.cn/*
@@ -5242,6 +5243,38 @@
     const statusContainer = queryFirst(["section.title", ".title"]);
     return statusContainer?.lastElementChild?.innerText || statusContainer?.innerText || "";
   };
+  const isLikelyYktUrl = (url = location.href) => {
+    try {
+      const { hostname, pathname } = new URL(url, location.origin);
+      return [
+        "yuketang.cn",
+        "gdufemooc.cn",
+        "nbdlib.cn",
+        "hnsyu.net",
+        "gdhkmooc.com"
+      ].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`)) || ["/web", "/v2/web", "/pro/lms", "/courselist", "/course", "/lesson"].some((pathPart) => pathname.includes(pathPart));
+    } catch (_error) {
+      return false;
+    }
+  };
+  const isLikelyYktPage = (url = location.href, targetDocument = document) => {
+    if (isLikelyYktUrl(url)) {
+      return true;
+    }
+    try {
+      return !!queryFirst([
+        ".logs-list",
+        ".btn-next",
+        ".leaf-detail",
+        "iframe.lesson-report-mobile",
+        ".header-bar",
+        "[class*='yuketang']",
+        "[src*='yuketang']"
+      ], targetDocument) || /雨课堂/i.test(targetDocument.title || "");
+    } catch (_error) {
+      return false;
+    }
+  };
   const leaveYktTaskView = async ({ waitSelectors = [".logs-list"], previousUrl = location.href, delay = 1500 } = {}) => {
     const backButton = queryFirstVisible([
       ".header-bar .left-btn",
@@ -5740,6 +5773,18 @@
       await sleepMs(4e3);
     }
   };
+  const useYktAutoLogic = () => {
+    const logStore = useLogStore();
+    if (location.href.includes("/v2/web") || getYktV2CourseItems().length > 0 || queryFirst([".logs-list"])) {
+      useYktV2Logic();
+      return;
+    }
+    if (location.href.includes("/pro/lms") || getYktProNextButton() || getYktProLessonNodes().length > 0 || queryFirst([".header-bar", "section.title"])) {
+      useYktProLogic();
+      return;
+    }
+    logStore.addLog("已进入雨课堂页面，但当前还不是具体任务页；进入课程目录或任务内容后脚本会自动启动", "warning");
+  };
   const useGenericFrameCourseChapterLogic = ({
     platformKey = "cx",
     entryLabel = "章节学习页面",
@@ -6000,13 +6045,15 @@
       logStore.addLog("请不要多个脚本同时使用，会有脚本冲突问题", "warning");
       logStore.addLog("如果脚本出现异常，请用谷歌、火狐等浏览器", "warning");
       const urlLogicPairs = [
-        { keyword: "/mycourse/studentstudy", logic: useCxChapterLogic },
-        { keyword: "/mooc2/work/dowork", logic: useCxWorkLogic },
-        { keyword: "/exam-ans/exam", logic: useCxExamLogic },
-        { keyword: "/v2/web", logic: useYktV2Logic },
-        { keyword: "/pro/lms", logic: useYktProLogic },
+        { key: "cx-chapter", test: (url22) => url22.includes("/mycourse/studentstudy"), logic: useCxChapterLogic },
+        { key: "cx-work", test: (url22) => url22.includes("/mooc2/work/dowork"), logic: useCxWorkLogic },
+        { key: "cx-exam", test: (url22) => url22.includes("/exam-ans/exam"), logic: useCxExamLogic },
+        { key: "ykt-v2", test: (url22) => url22.includes("/v2/web"), logic: useYktV2Logic },
+        { key: "ykt-pro", test: (url22) => url22.includes("/pro/lms"), logic: useYktProLogic },
+        { key: "ykt-auto", test: (url22) => isLikelyYktPage(url22), logic: useYktAutoLogic },
         {
-          keyword: "mycourse/stu?courseid",
+          key: "cx-empty",
+          test: (url22) => url22.includes("mycourse/stu?courseid"),
           logic: () => {
             logStore.addLog("该页面无任务，请进入章节或任务页面使用", "danger");
           }
@@ -6014,7 +6061,7 @@
       ];
       const getMatchedLogicPair = (url22) => {
         for (const routeItem of urlLogicPairs) {
-          if (url22.includes(routeItem.keyword)) {
+          if (routeItem.test(url22)) {
             return routeItem;
           }
         }
@@ -6022,7 +6069,7 @@
       };
       const executeLogicByUrl = (url22, force = false) => {
         const matchedPair = getMatchedLogicPair(url22);
-        const nextLogicKey = matchedPair?.keyword || "";
+        const nextLogicKey = matchedPair?.key || "";
         if (!force && runtimeState.currentRouteLogicKey === nextLogicKey) {
           isShow.value = !!matchedPair;
           return;
@@ -6300,7 +6347,7 @@
       const url2 = window.location.href;
       if (url2.includes("chaoxing"))
         configStore.platformName = "cx";
-      else if (url2.includes("yuketang.cn") || url2.includes("gdufemooc.cn") || url2.includes("/v2/web") || url2.includes("/pro/lms"))
+      else if (isLikelyYktPage(url2))
         configStore.platformName = "ykt";
       else if (url2.includes("zhihuishu"))
         configStore.platformName = "zhs";
