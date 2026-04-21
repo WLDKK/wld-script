@@ -57,6 +57,8 @@
   const YKT_PATH_HINTS = [
     "/web",
     "/v2/web",
+    "/v2/web/studentLog",
+    "/studentLog",
     "/pro/lms",
     "/courselist",
     "/course",
@@ -78,6 +80,8 @@
     ".progress-wrap .text",
     ".video-box",
     ".swiper-wrapper",
+    "[class*='studentLog']",
+    "[class*='student-log']",
     ".dialog-header",
     "video",
     "audio",
@@ -85,6 +89,27 @@
     "[class*='video']",
     "[class*='yuketang']",
     "[src*='yuketang']"
+  ];
+  const YKT_V2_LIST_ROOT_SELECTORS = [
+    ".logs-list",
+    ".logsList",
+    ".logs_list",
+    ".el-scrollbar__view",
+    ".el-scrollbar__wrap",
+    ".viewContainer",
+    ".student-log",
+    ".studentLog",
+    "[class*='studentLog']",
+    "[class*='student-log']"
+  ];
+  const YKT_V2_ITEM_SELECTORS = [
+    ".content-box section",
+    ".content-box",
+    "section",
+    ".tag",
+    ".leaf-detail",
+    ".activity__wrap",
+    "li"
   ];
   const ROUTE_CHANGE_EVENT_NAME = "__xuexutongRouteChange__";
   const isLikelyYktHost = (hostname = "") => {
@@ -5390,11 +5415,22 @@
     };
   };
   const getYktV2CourseItems = () => {
-    const listRoot = queryFirst([".logs-list", ".logsList", ".logs_list"]);
+    const listRoot = queryFirst(YKT_V2_LIST_ROOT_SELECTORS);
     if (!listRoot) {
+      const fallbackRoots = getVisibleElements(Array.from(document.querySelectorAll(".viewContainer, .el-scrollbar__wrap, .el-scrollbar__view, .page-container, main, body")));
+      for (const root of fallbackRoots) {
+        const visibleItems = getVisibleElements(Array.from(root.children || [])).filter((item) => !!queryFirst(YKT_V2_ITEM_SELECTORS, item));
+        if (visibleItems.length >= 2) {
+          return visibleItems;
+        }
+      }
       return [];
     }
-    return getVisibleElements(Array.from(listRoot.children)).filter((item) => !!queryFirst([".content-box section", ".content-box", "section", ".tag"], item));
+    const directItems = getVisibleElements(Array.from(listRoot.children)).filter((item) => !!queryFirst(YKT_V2_ITEM_SELECTORS, item));
+    if (directItems.length) {
+      return directItems;
+    }
+    return getVisibleElements(Array.from(listRoot.querySelectorAll(":scope > *"))).filter((item) => !!queryFirst(YKT_V2_ITEM_SELECTORS, item));
   };
   const getYktBatchActivities = (course) => {
     const scopedRoot = course?.parentElement?.parentElement || course?.parentElement || course;
@@ -5437,7 +5473,7 @@
     if (pathname.includes("/pro/lms") || getYktProNextButton() || getYktProLessonNodes().length > 0 || !!queryFirst([".header-bar", "section.title"], targetDocument)) {
       return "pro";
     }
-    if (pathname.includes("/v2/web") || getYktV2CourseItems().length > 0 || !!queryFirst([".logs-list", ".logsList", ".logs_list", ".leaf_list__wrap", ".dialog-header", ".video-box", ".progress-wrap .text", ".swiper-wrapper"], targetDocument)) {
+    if (pathname.includes("/v2/web") || pathname.includes("/studentLog") || pathname.includes("/studentlog") || getYktV2CourseItems().length > 0 || !!queryFirst([".logs-list", ".logsList", ".logs_list", ".leaf_list__wrap", ".dialog-header", ".video-box", ".progress-wrap .text", ".swiper-wrapper", "[class*='studentLog']", "[class*='student-log']"], targetDocument)) {
       return "v2";
     }
     if (!!queryFirst(["video", "audio", ".play-btn-tip", ".xt_video_player_common_icon"], targetDocument)) {
