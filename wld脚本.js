@@ -257,6 +257,7 @@
   runtimeState.routeEvaluationTimer = runtimeState.routeEvaluationTimer ?? 0;
   runtimeState.currentRouteLogicKey = runtimeState.currentRouteLogicKey ?? "";
   runtimeState.currentRouteSceneKey = runtimeState.currentRouteSceneKey ?? "";
+  runtimeState.currentRouteFingerprint = runtimeState.currentRouteFingerprint ?? "";
   runtimeState.logicRunLocks = runtimeState.logicRunLocks && typeof runtimeState.logicRunLocks === "object" ? runtimeState.logicRunLocks : {};
   runtimeState.yktBackgroundWatcherStarted = runtimeState.yktBackgroundWatcherStarted ?? false;
   runtimeState.pasteMutationWatcherStarted = runtimeState.pasteMutationWatcherStarted ?? false;
@@ -5467,11 +5468,18 @@
     return flags.filter(Boolean).join("|") || "shell";
   };
   const getPageSceneKey = (url = location.href) => {
-    if (isLikelyYktPage(url)) {
-      return `ykt:${getYktSceneSignature(document)}`;
-    }
     const parsedUrl = parseUrlSafe(url);
-    return parsedUrl ? `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}` : url;
+    const normalizedUrl = parsedUrl ? `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}` : url;
+    if (isLikelyYktPage(url)) {
+      return `ykt:${normalizedUrl}|${getYktSceneSignature(document)}`;
+    }
+    return normalizedUrl;
+  };
+  const getRouteFingerprint = (url = location.href) => {
+    const sceneKey = getPageSceneKey(url);
+    const runtimeMode = isLikelyYktPage(url) ? getYktRuntimeMode(document) : "";
+    const visibleMarker = document.visibilityState || "visible";
+    return `${url}::${sceneKey}::${runtimeMode}::${visibleMarker}`;
   };
   const dispatchRouteChange = () => {
     try {
@@ -6443,13 +6451,15 @@
         const matchedPair = getMatchedLogicPair(url22);
         const nextLogicKey = matchedPair?.key || "";
         const nextSceneKey = getPageSceneKey(url22);
+        const nextRouteFingerprint = getRouteFingerprint(url22);
         const shouldKeepVisible = !!matchedPair || isLikelyYktPage(url22) || url22.includes("chaoxing");
-        if (!force && runtimeState.currentRouteLogicKey === nextLogicKey && runtimeState.currentRouteSceneKey === nextSceneKey) {
+        if (!force && runtimeState.currentRouteLogicKey === nextLogicKey && runtimeState.currentRouteSceneKey === nextSceneKey && runtimeState.currentRouteFingerprint === nextRouteFingerprint) {
           isShow.value = shouldKeepVisible;
           return;
         }
         runtimeState.currentRouteLogicKey = nextLogicKey;
         runtimeState.currentRouteSceneKey = nextSceneKey;
+        runtimeState.currentRouteFingerprint = nextRouteFingerprint;
         if (matchedPair) {
           runExclusiveLogic(matchedPair.lockKey || matchedPair.key, matchedPair.logic);
           isShow.value = true;
@@ -6474,22 +6484,36 @@
         }
         runtimeState.routeWatcherStarted = true;
         hookHistoryRouteEvents();
-        let currentUrl = window.location.href;
-        const syncByUrl = (force = false) => {
-          if (force || currentUrl !== window.location.href) {
-            currentUrl = window.location.href;
+        let currentFingerprint = getRouteFingerprint(window.location.href);
+        const syncByRoute = (force = false) => {
+          const nextFingerprint = getRouteFingerprint(window.location.href);
+          if (force || currentFingerprint !== nextFingerprint) {
+            currentFingerprint = nextFingerprint;
             scheduleRouteSync(force);
           }
         };
         setInterval(() => {
-          syncByUrl();
+          syncByRoute();
         }, 1e3);
-        window.addEventListener(ROUTE_CHANGE_EVENT_NAME, () => syncByUrl(true));
+        window.addEventListener(ROUTE_CHANGE_EVENT_NAME, () => syncByRoute(true));
         document.addEventListener("visibilitychange", () => {
           if (!document.hidden) {
-            scheduleRouteSync();
+            syncByRoute(true);
           }
         });
+        window.addEventListener("pageshow", () => {
+          syncByRoute(true);
+        });
+        document.addEventListener("load", (event) => {
+          const target = event.target;
+          if (!target || target.nodeType !== 1) {
+            return;
+          }
+          const tagName = target.tagName;
+          if (tagName === "IFRAME" || tagName === "VIDEO" || tagName === "AUDIO") {
+            syncByRoute(true);
+          }
+        }, true);
         if (!runtimeState.routeMutationWatcherStarted && document.documentElement) {
           runtimeState.routeMutationWatcherStarted = true;
           runtimeState.routeMutationObserver = new MutationObserver((mutationList) => {
@@ -6513,7 +6537,7 @@
               ]));
             });
             if (shouldSync && (allowFrameRuntime || isLikelyYktPage(window.location.href) || window.location.href.includes("chaoxing"))) {
-              scheduleRouteSync();
+              syncByRoute();
             }
           });
           runtimeState.routeMutationObserver.observe(document.documentElement, {
