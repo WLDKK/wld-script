@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         wld脚本｜学习通｜雨课堂网课助手
 // @namespace    wld-script
-// @version      0.2.5
+// @version      0.2.6
 // @author       WLD
 // @description  wld脚本（WLD维护版）：支持学习通与雨课堂的视频/音频自动播放、PPT/文档/电子书自动阅读、任务点/章节自动跳转，以及作业/考试页面允许粘贴；自动查题、自动答题、AI/OCR 与外接题库能力已全部移除。致谢原作者 isMobile，并感谢雨课堂参考作者风之子与允许粘贴脚本作者 PY-DNG。
 // @icon         https://vitejs.dev/logo.svg
 // @match        *://yuketang.cn/*
+// @match        *://rainclassroom.com/*
 // @match        *://*.chaoxing.com/*
 // @match        *://*.yuketang.cn/*
+// @match        *://*.rainclassroom.com/*
 // @match        *://*.gdufemooc.cn/*
 // @match        *://*.edu.cn/*
 // @match        *://*.nbdlib.cn/*
@@ -44,9 +46,29 @@
       return true;
     }
   })();
+  const YKT_HOST_SUFFIXES = [
+    "yuketang.cn",
+    "gdufemooc.cn",
+    "nbdlib.cn",
+    "hnsyu.net",
+    "gdhkmooc.com",
+    "rainclassroom.com"
+  ];
+  const isLikelyYktHost = (hostname = "") => {
+    return YKT_HOST_SUFFIXES.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+  };
+  const parseUrlSafe = (url, baseUrl = location.origin) => {
+    try {
+      return new URL(url, baseUrl);
+    } catch (_error) {
+      return null;
+    }
+  };
   const allowFrameRuntime = (() => {
     try {
-      return /(yuketang\.cn|gdufemooc\.cn|nbdlib\.cn|hnsyu\.net|gdhkmooc\.com|\/v2\/web|\/pro\/lms|\/web|\/course|\/lesson)/i.test(location.href);
+      const currentUrl = parseUrlSafe(location.href);
+      const referrerUrl = parseUrlSafe(document.referrer || "");
+      return !!currentUrl && (isLikelyYktHost(currentUrl.hostname) || ["/v2/web", "/pro/lms", "/web", "/course", "/lesson", "/video"].some((pathPart) => currentUrl.pathname.includes(pathPart))) || !!referrerUrl && isLikelyYktHost(referrerUrl.hostname);
     } catch (_error) {
       return false;
     }
@@ -5250,18 +5272,12 @@
     return statusContainer?.lastElementChild?.innerText || statusContainer?.innerText || "";
   };
   const isLikelyYktUrl = (url = location.href) => {
-    try {
-      const { hostname, pathname } = new URL(url, location.origin);
-      return [
-        "yuketang.cn",
-        "gdufemooc.cn",
-        "nbdlib.cn",
-        "hnsyu.net",
-        "gdhkmooc.com"
-      ].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`)) || ["/web", "/v2/web", "/pro/lms", "/courselist", "/course", "/lesson"].some((pathPart) => pathname.includes(pathPart));
-    } catch (_error) {
+    const currentUrl = parseUrlSafe(url);
+    const referrerUrl = parseUrlSafe(document.referrer || "");
+    if (!currentUrl) {
       return false;
     }
+    return isLikelyYktHost(currentUrl.hostname) || ["/web", "/v2/web", "/pro/lms", "/courselist", "/course", "/lesson", "/video", "/learn", "/studycontent"].some((pathPart) => currentUrl.pathname.includes(pathPart)) || !!referrerUrl && isLikelyYktHost(referrerUrl.hostname);
   };
   const isLikelyYktPage = (url = location.href, targetDocument = document) => {
     if (isLikelyYktUrl(url)) {
@@ -5274,9 +5290,13 @@
         ".leaf-detail",
         "iframe.lesson-report-mobile",
         ".header-bar",
+        "video",
+        "audio",
+        "[class*='player']",
+        "[class*='video']",
         "[class*='yuketang']",
         "[src*='yuketang']"
-      ], targetDocument) || /雨课堂/i.test(targetDocument.title || "");
+      ], targetDocument) || /雨课堂/i.test(targetDocument.title || "") || isLikelyYktUrl(targetDocument.referrer || "");
     } catch (_error) {
       return false;
     }
@@ -6076,8 +6096,9 @@
       const executeLogicByUrl = (url22, force = false) => {
         const matchedPair = getMatchedLogicPair(url22);
         const nextLogicKey = matchedPair?.key || "";
+        const shouldKeepVisible = !!matchedPair || isLikelyYktPage(url22) || url22.includes("chaoxing");
         if (!force && runtimeState.currentRouteLogicKey === nextLogicKey) {
-          isShow.value = !!matchedPair;
+          isShow.value = shouldKeepVisible;
           return;
         }
         runtimeState.currentRouteLogicKey = nextLogicKey;
@@ -6086,7 +6107,7 @@
           isShow.value = true;
           return;
         }
-        isShow.value = false;
+        isShow.value = shouldKeepVisible;
       };
       const emit = __emit;
       const startRouteWatcher = () => {
@@ -6341,7 +6362,7 @@
             _: 1
           })
         ], 4)), [
-          [vue.vShow, isShow.value]
+          [vue.vShow, isShow.value || vue.unref(configStore).platformName === "ykt"]
         ]);
       };
     }
@@ -6353,7 +6374,7 @@
       const url2 = window.location.href;
       if (url2.includes("chaoxing"))
         configStore.platformName = "cx";
-      else if (isLikelyYktPage(url2))
+      else if (isLikelyYktPage(url2) || allowFrameRuntime)
         configStore.platformName = "ykt";
       else if (url2.includes("zhihuishu"))
         configStore.platformName = "zhs";
