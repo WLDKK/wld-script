@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         wld脚本｜学习通｜雨课堂网课助手
 // @namespace    wld-script
-// @version      0.2.6
+// @version      0.2.7
 // @author       WLD
-// @description  wld脚本（WLD维护版）：支持学习通与雨课堂的视频/音频自动播放、PPT/文档/电子书自动阅读、任务点/章节自动跳转，以及作业/考试页面允许粘贴；自动查题、自动答题、AI/OCR 与外接题库能力已全部移除。致谢原作者 isMobile，并感谢雨课堂参考作者风之子与允许粘贴脚本作者 PY-DNG。
+// @description  学习通与雨课堂的视频/音频自动播放、文档阅读、章节衔接与页面粘贴。
 // @icon         https://vitejs.dev/logo.svg
 // @match        *://yuketang.cn/*
 // @match        *://rainclassroom.com/*
@@ -54,6 +54,39 @@
     "gdhkmooc.com",
     "rainclassroom.com"
   ];
+  const YKT_PATH_HINTS = [
+    "/web",
+    "/v2/web",
+    "/pro/lms",
+    "/courselist",
+    "/course",
+    "/lesson",
+    "/lesson-report",
+    "/video",
+    "/learn",
+    "/studycontent"
+  ];
+  const YKT_PAGE_HINT_SELECTORS = [
+    ".logs-list",
+    ".logsList",
+    ".logs_list",
+    ".btn-next",
+    ".leaf-detail",
+    ".leaf_list__wrap",
+    "iframe.lesson-report-mobile",
+    ".header-bar",
+    ".progress-wrap .text",
+    ".video-box",
+    ".swiper-wrapper",
+    ".dialog-header",
+    "video",
+    "audio",
+    "[class*='player']",
+    "[class*='video']",
+    "[class*='yuketang']",
+    "[src*='yuketang']"
+  ];
+  const ROUTE_CHANGE_EVENT_NAME = "__xuexutongRouteChange__";
   const isLikelyYktHost = (hostname = "") => {
     return YKT_HOST_SUFFIXES.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
   };
@@ -64,11 +97,15 @@
       return null;
     }
   };
+  const matchesYktUrlHints = (parsedUrl) => {
+    return !!parsedUrl && (isLikelyYktHost(parsedUrl.hostname) || YKT_PATH_HINTS.some((pathPart) => parsedUrl.pathname.includes(pathPart)));
+  };
   const allowFrameRuntime = (() => {
     try {
       const currentUrl = parseUrlSafe(location.href);
       const referrerUrl = parseUrlSafe(document.referrer || "");
-      return !!currentUrl && (isLikelyYktHost(currentUrl.hostname) || ["/v2/web", "/pro/lms", "/web", "/course", "/lesson", "/video"].some((pathPart) => currentUrl.pathname.includes(pathPart))) || !!referrerUrl && isLikelyYktHost(referrerUrl.hostname);
+      const frameSrcUrl = parseUrlSafe(window.frameElement?.getAttribute("src") || "");
+      return matchesYktUrlHints(currentUrl) || matchesYktUrlHints(referrerUrl) || matchesYktUrlHints(frameSrcUrl);
     } catch (_error) {
       return false;
     }
@@ -202,15 +239,20 @@
   };
   const RUNTIME_STATE_KEY = "__xuexutongRuntimeState__";
   const runtimeWindow = _unsafeWindow || window;
-  const runtimeState = runtimeWindow[RUNTIME_STATE_KEY] || (runtimeWindow[RUNTIME_STATE_KEY] = {
-    chapterUrlWatcherStarted: false,
-    errorHooked: false,
-    webpackHooked: false,
-    pasteWatcherStarted: false,
-    yktScreenCheckPrevented: false,
-    routeWatcherStarted: false,
-    currentRouteLogicKey: ""
-  });
+  const runtimeState = runtimeWindow[RUNTIME_STATE_KEY] || (runtimeWindow[RUNTIME_STATE_KEY] = {});
+  runtimeState.chapterUrlWatcherStarted = runtimeState.chapterUrlWatcherStarted ?? false;
+  runtimeState.errorHooked = runtimeState.errorHooked ?? false;
+  runtimeState.webpackHooked = runtimeState.webpackHooked ?? false;
+  runtimeState.pasteWatcherStarted = runtimeState.pasteWatcherStarted ?? false;
+  runtimeState.yktScreenCheckPrevented = runtimeState.yktScreenCheckPrevented ?? false;
+  runtimeState.routeWatcherStarted = runtimeState.routeWatcherStarted ?? false;
+  runtimeState.routeMutationWatcherStarted = runtimeState.routeMutationWatcherStarted ?? false;
+  runtimeState.historyHooked = runtimeState.historyHooked ?? false;
+  runtimeState.routeEvaluationTimer = runtimeState.routeEvaluationTimer ?? 0;
+  runtimeState.currentRouteLogicKey = runtimeState.currentRouteLogicKey ?? "";
+  runtimeState.currentRouteSceneKey = runtimeState.currentRouteSceneKey ?? "";
+  runtimeState.logicRunLocks = runtimeState.logicRunLocks && typeof runtimeState.logicRunLocks === "object" ? runtimeState.logicRunLocks : {};
+  runtimeState.yktBackgroundWatcherStarted = runtimeState.yktBackgroundWatcherStarted ?? false;
   const getScriptInfo = () => {
     return {
       name: _GM_info.script.name,
@@ -561,16 +603,12 @@
   const _hoisted_1$2 = { style: { "font-size": "12px" } };
   function _sfc_render$1(_ctx, _cache) {
     return vue.openBlock(), vue.createElementBlock("div", _hoisted_1$2, _cache[0] || (_cache[0] = [
-      vue.createElementVNode("p", null, "1、项目名已更新为 wld脚本，进入对应页面即可直接使用。", -1),
-      vue.createElementVNode("p", null, "2、当前版本已支持学习通与雨课堂的视频、音频、PPT、文档、电子书等任务的自动处理。", -1),
-      vue.createElementVNode("p", null, "3、学习通章节页遇到未完成作业时会自动跳过当前作业任务点并继续后续章节流程。", -1),
-      vue.createElementVNode("p", null, "4、雨课堂当前支持视频/音频自动播放、课件与阅读任务自动处理，并会对作业、考试、讨论等非播放任务进行跳过或等待手动完成。", -1),
-      vue.createElementVNode("p", null, "5、作业页和考试页需要手动完成，但已内置允许粘贴功能。", -1),
-      vue.createElementVNode("p", null, "6、当前维护作者为 WLD。", -1),
-      vue.createElementVNode("p", null, "7、致谢原学习通脚本作者 isMobile、雨课堂参考脚本作者 风之子，以及允许粘贴脚本作者 PY-DNG。", -1),
-      vue.createElementVNode("p", { style: { "font-weight": "500" } }, "务必注意：", -1),
-      vue.createElementVNode("p", null, "-- 若脚本出现异常，请在脚本反馈区反馈，或联系作者修复。", -1),
-      vue.createElementVNode("p", null, "-- 自动查题、自动答题与外接题库能力仍保持移除状态。", -1)
+      vue.createElementVNode("p", null, "1、进入课程目录、章节页或播放器页面后，脚本会自动识别。", -1),
+      vue.createElementVNode("p", null, "2、学习通支持视频、音频、PPT、文档、电子书和章节衔接。", -1),
+      vue.createElementVNode("p", null, "3、章节页遇到未完成作业时，会跳过当前作业任务点并继续后续流程。", -1),
+      vue.createElementVNode("p", null, "4、雨课堂采用内容识别和后台跟进，列表页、任务页、播放器页都可持续运行。", -1),
+      vue.createElementVNode("p", null, "5、作业页和考试页已启用允许粘贴。", -1),
+      vue.createElementVNode("p", null, "6、维护作者为 WLD，感谢 isMobile、风之子、PY-DNG。", -1)
     ]));
   }
   const Tutorial = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$1]]);
@@ -578,12 +616,11 @@
   const _hoisted_1$1 = { style: { "font-size": "12px" } };
   function _sfc_render(_ctx, _cache) {
     return vue.openBlock(), vue.createElementBlock("div", _hoisted_1$1, _cache[0] || (_cache[0] = [
-      vue.createElementVNode("p", null, "1、本脚本仅供学习和研究目的使用，并应在24小时内删除。脚本的使用不应违反任何法律法规及学术道德标准。", -1),
-      vue.createElementVNode("p", null, "2、用户在使用脚本时，必须遵守所有适用的法律法规。任何由于使用脚本而引起的违法行为或不当行为，其产生的一切后果由用户自行承担。", -1),
-      vue.createElementVNode("p", null, "3、开发者不对用户使用脚本所产生的任何直接或间接后果负责。用户应自行评估使用脚本的风险，并对任何可能的负面影响承担全责。", -1),
-      vue.createElementVNode("p", null, "4、本声明的目的在于提醒用户注意相关法律法规与风险，确保用户在明智、合法的前提下使用脚本。", -1),
-      vue.createElementVNode("p", null, "5、如用户在使用脚本的过程中有任何疑问，建议立即停止使用，并删除所有相关文件。", -1),
-      vue.createElementVNode("p", null, "6、本免责声明的最终解释权归脚本开发者所有。", -1)
+      vue.createElementVNode("p", null, "1、建议直接在课程目录、章节页或内容页使用。", -1),
+      vue.createElementVNode("p", null, "2、雨课堂支持同页切换和延迟加载，进入视频后会继续跟进。", -1),
+      vue.createElementVNode("p", null, "3、如果当前页没有挂载面板，刷新当前课程页即可重新识别。", -1),
+      vue.createElementVNode("p", null, "4、播放倍速和课件停留时间可在设置页调整。", -1),
+      vue.createElementVNode("p", null, "5、反馈问题时附上页面类型和截图，会更容易定位。", -1)
     ]));
   }
   const ScriptTip = /* @__PURE__ */ _export_sfc(_sfc_main$4, [["render", _sfc_render]]);
@@ -5274,32 +5311,110 @@
   const isLikelyYktUrl = (url = location.href) => {
     const currentUrl = parseUrlSafe(url);
     const referrerUrl = parseUrlSafe(document.referrer || "");
-    if (!currentUrl) {
-      return false;
-    }
-    return isLikelyYktHost(currentUrl.hostname) || ["/web", "/v2/web", "/pro/lms", "/courselist", "/course", "/lesson", "/video", "/learn", "/studycontent"].some((pathPart) => currentUrl.pathname.includes(pathPart)) || !!referrerUrl && isLikelyYktHost(referrerUrl.hostname);
+    return matchesYktUrlHints(currentUrl) || matchesYktUrlHints(referrerUrl);
   };
   const isLikelyYktPage = (url = location.href, targetDocument = document) => {
     if (isLikelyYktUrl(url)) {
       return true;
     }
     try {
-      return !!queryFirst([
-        ".logs-list",
-        ".btn-next",
-        ".leaf-detail",
-        "iframe.lesson-report-mobile",
-        ".header-bar",
-        "video",
-        "audio",
-        "[class*='player']",
-        "[class*='video']",
-        "[class*='yuketang']",
-        "[src*='yuketang']"
-      ], targetDocument) || /雨课堂/i.test(targetDocument.title || "") || isLikelyYktUrl(targetDocument.referrer || "");
+      const frameSrcUrl = parseUrlSafe(window.frameElement?.getAttribute("src") || "");
+      return !!queryFirst(YKT_PAGE_HINT_SELECTORS, targetDocument) || /雨课堂/i.test(targetDocument.title || "") || isLikelyYktUrl(targetDocument.referrer || "") || matchesYktUrlHints(frameSrcUrl);
     } catch (_error) {
       return false;
     }
+  };
+  const getYktRuntimeMode = (targetDocument = document) => {
+    const currentUrl = parseUrlSafe(location.href);
+    const pathname = currentUrl?.pathname || "";
+    if (pathname.includes("/pro/lms") || getYktProNextButton() || getYktProLessonNodes().length > 0 || !!queryFirst([".header-bar", "section.title"], targetDocument)) {
+      return "pro";
+    }
+    if (pathname.includes("/v2/web") || getYktV2CourseItems().length > 0 || !!queryFirst([".logs-list", ".logsList", ".logs_list", ".leaf_list__wrap", ".dialog-header", ".video-box", ".progress-wrap .text", ".swiper-wrapper"], targetDocument)) {
+      return "v2";
+    }
+    if (!!queryFirst(["video", "audio", ".play-btn-tip", ".xt_video_player_common_icon"], targetDocument)) {
+      return "media";
+    }
+    return isLikelyYktPage(location.href, targetDocument) ? "shell" : "";
+  };
+  const getYktSceneSignature = (targetDocument = document) => {
+    const flags = [getYktRuntimeMode(targetDocument)];
+    if (queryFirst(["video", "audio"], targetDocument)) {
+      flags.push("media");
+    }
+    if (queryFirst([".progress-wrap .text"], targetDocument)) {
+      flags.push("progress");
+    }
+    if (queryFirst([".btn-next"], targetDocument)) {
+      flags.push("next");
+    }
+    if (queryFirst([".leaf_list__wrap"], targetDocument)) {
+      flags.push("batch");
+    }
+    if (queryFirst(["iframe.lesson-report-mobile"], targetDocument)) {
+      flags.push("iframe");
+    }
+    if (queryFirst([".video-box", ".swiper-wrapper"], targetDocument)) {
+      flags.push("courseware");
+    }
+    return flags.filter(Boolean).join("|") || "shell";
+  };
+  const getPageSceneKey = (url = location.href) => {
+    if (isLikelyYktPage(url)) {
+      return `ykt:${getYktSceneSignature(document)}`;
+    }
+    const parsedUrl = parseUrlSafe(url);
+    return parsedUrl ? `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}` : url;
+  };
+  const dispatchRouteChange = () => {
+    try {
+      window.dispatchEvent(new CustomEvent(ROUTE_CHANGE_EVENT_NAME, {
+        detail: { href: location.href }
+      }));
+    } catch (_error) {
+      window.dispatchEvent(new Event(ROUTE_CHANGE_EVENT_NAME));
+    }
+  };
+  const queueRouteChange = () => {
+    Promise.resolve().then(() => dispatchRouteChange());
+  };
+  const hookHistoryRouteEvents = () => {
+    if (runtimeState.historyHooked) {
+      return;
+    }
+    runtimeState.historyHooked = true;
+    ["pushState", "replaceState"].forEach((method) => {
+      try {
+        const original = history[method];
+        if (typeof original !== "function" || original.__xuexutongPatched) {
+          return;
+        }
+        const wrapped = function(...args) {
+          const result = original.apply(this, args);
+          queueRouteChange();
+          return result;
+        };
+        wrapped.__xuexutongPatched = true;
+        history[method] = wrapped;
+      } catch (_error) {
+      }
+    });
+    window.addEventListener("popstate", dispatchRouteChange);
+    window.addEventListener("hashchange", dispatchRouteChange);
+  };
+  const runExclusiveLogic = (logicKey, logic) => {
+    const lockKey = logicKey || "__default__";
+    if (!logic || runtimeState.logicRunLocks[lockKey]) {
+      return false;
+    }
+    runtimeState.logicRunLocks[lockKey] = true;
+    Promise.resolve().then(() => logic()).catch((error) => {
+      console.error(`[wld-script] ${lockKey} run failed`, error);
+    }).finally(() => {
+      runtimeState.logicRunLocks[lockKey] = false;
+    });
+    return true;
   };
   const leaveYktTaskView = async ({ waitSelectors = [".logs-list"], previousUrl = location.href, delay = 1500 } = {}) => {
     const backButton = queryFirstVisible([
@@ -5382,24 +5497,89 @@
       media.volume = 0;
     });
   };
+  const applyYktMediaDefaults = (media, targetDocument = document) => {
+    if (!media) {
+      return;
+    }
+    try {
+      media.autoplay = true;
+      media.defaultMuted = true;
+      media.playsInline = true;
+      media.muted = true;
+      media.volume = 0;
+      media.playbackRate = getYktPlaybackRate();
+    } catch (_error) {
+    }
+    setYktPlaybackRate(targetDocument);
+    muteYktMedia(targetDocument);
+    try {
+      media.play().catch(() => {
+      });
+    } catch (_error) {
+    }
+  };
+  const bindYktPassiveMedia = (media, targetDocument = document) => {
+    if (!media || media.__xuexutongPassiveBound) {
+      return;
+    }
+    media.__xuexutongPassiveBound = true;
+    const syncMedia = () => applyYktMediaDefaults(media, targetDocument);
+    const resumeMedia = () => {
+      if (!media.ended) {
+        syncMedia();
+      }
+    };
+    media.addEventListener("loadedmetadata", syncMedia);
+    media.addEventListener("canplay", syncMedia);
+    media.addEventListener("play", syncMedia);
+    media.addEventListener("pause", () => {
+      if (!media.ended) {
+        setTimeout(resumeMedia, 600);
+      }
+    });
+    media.addEventListener("ratechange", () => {
+      const rate = getYktPlaybackRate();
+      if (Math.abs((Number(media.playbackRate) || 0) - rate) > 0.01) {
+        media.playbackRate = rate;
+      }
+    });
+    media.addEventListener("volumechange", () => {
+      if (!media.muted || media.volume !== 0) {
+        media.muted = true;
+        media.volume = 0;
+      }
+    });
+    syncMedia();
+  };
+  const scanYktMediaDocuments = () => {
+    if (!isLikelyYktPage(location.href) && !allowFrameRuntime) {
+      return;
+    }
+    preventScreenCheck();
+    getAccessibleDocuments().forEach((targetDocument) => {
+      queryAll(["video", "audio"], targetDocument).forEach((media) => bindYktPassiveMedia(media, targetDocument));
+    });
+  };
+  const startYktBackgroundWatcher = () => {
+    if (runtimeState.yktBackgroundWatcherStarted) {
+      return;
+    }
+    runtimeState.yktBackgroundWatcherStarted = true;
+    const syncMedia = () => {
+      if (isLikelyYktPage(location.href) || allowFrameRuntime) {
+        scanYktMediaDocuments();
+      }
+    };
+    syncMedia();
+    setInterval(syncMedia, 2500);
+  };
   const keepYktMediaPlaying = (media, targetDocument = document) => {
     if (!media) {
       return () => {
       };
     }
     const resumePlayback = () => {
-      try {
-        media.playbackRate = getYktPlaybackRate();
-        media.muted = true;
-        media.volume = 0;
-        if (media.paused && !media.ended) {
-          media.play().catch(() => {
-          });
-        }
-      } catch (_error) {
-      }
-      setYktPlaybackRate(targetDocument);
-      muteYktMedia(targetDocument);
+      applyYktMediaDefaults(media, targetDocument);
     };
     resumePlayback();
     const onPause = () => {
@@ -5772,10 +5952,10 @@
           stopKeepingAlive();
         }
       } else if (taskMeta.type === "homework") {
-        logStore.addLog(`进入作业：${className}，不自动答题，已跳过`, "warning");
+        logStore.addLog(`进入作业：${className}，已跳过`, "warning");
         await sleepMs(1200);
       } else if (taskMeta.type === "exam") {
-        logStore.addLog(`进入考试：${className}，不自动答题，已跳过`, "warning");
+        logStore.addLog(`进入考试：${className}，已跳过`, "warning");
         await sleepMs(1200);
       } else if (taskMeta.type === "classroom") {
         logStore.addLog(`进入课堂：${className}，无自动功能，已跳过`, "warning");
@@ -5801,15 +5981,21 @@
   };
   const useYktAutoLogic = () => {
     const logStore = useLogStore();
-    if (location.href.includes("/v2/web") || getYktV2CourseItems().length > 0 || queryFirst([".logs-list"])) {
+    const mode = getYktRuntimeMode();
+    if (mode === "v2") {
       useYktV2Logic();
       return;
     }
-    if (location.href.includes("/pro/lms") || getYktProNextButton() || getYktProLessonNodes().length > 0 || queryFirst([".header-bar", "section.title"])) {
+    if (mode === "pro") {
       useYktProLogic();
       return;
     }
-    logStore.addLog("已进入雨课堂页面，但当前还不是具体任务页；进入课程目录或任务内容后脚本会自动启动", "warning");
+    if (mode === "media") {
+      scanYktMediaDocuments();
+      logStore.addLog("已进入雨课堂内容页，后台跟进已开启", "success");
+      return;
+    }
+    logStore.addLog("已识别到雨课堂页面，进入课程内容后会自动跟进", "warning");
   };
   const useGenericFrameCourseChapterLogic = ({
     platformKey = "cx",
@@ -6045,14 +6231,12 @@
     const logStore = useLogStore();
     decrypt(document);
     logStore.addLog(`检测到作业页面`, "primary");
-    logStore.addLog(`自动查题和答题功能已移除，请手动完成当前作业`, "warning");
     logStore.addLog(`当前页面已启用允许粘贴，可直接粘贴内容`, "success");
   };
   const useCxExamLogic = async () => {
     const logStore = useLogStore();
     decrypt(document);
     logStore.addLog(`检测到考试页面`, "primary");
-    logStore.addLog(`自动查题、答题和自动切换功能已移除，请手动作答并提交试卷`, "warning");
     logStore.addLog(`当前页面已启用允许粘贴，可直接粘贴内容`, "success");
   };
   const _sfc_main$3 = /* @__PURE__ */ vue.defineComponent({
@@ -6066,19 +6250,20 @@
       const configStore = useConfigStore();
       const logStore = useLogStore();
       const url2 = window.location.href;
-      logStore.addLog("用户悉知：使用脚本即为完全同意用户协议", "success");
-      logStore.addLog("脚本加载成功，正在解析网页", "primary");
-      logStore.addLog("请不要多个脚本同时使用，会有脚本冲突问题", "warning");
-      logStore.addLog("如果脚本出现异常，请用谷歌、火狐等浏览器", "warning");
+      logStore.addLog("脚本已启动，正在识别页面", "primary");
+      if (isLikelyYktPage(url2) || allowFrameRuntime) {
+        logStore.addLog("雨课堂后台监听已开启", "success");
+      }
       const urlLogicPairs = [
-        { key: "cx-chapter", test: (url22) => url22.includes("/mycourse/studentstudy"), logic: useCxChapterLogic },
-        { key: "cx-work", test: (url22) => url22.includes("/mooc2/work/dowork"), logic: useCxWorkLogic },
-        { key: "cx-exam", test: (url22) => url22.includes("/exam-ans/exam"), logic: useCxExamLogic },
-        { key: "ykt-v2", test: (url22) => url22.includes("/v2/web"), logic: useYktV2Logic },
-        { key: "ykt-pro", test: (url22) => url22.includes("/pro/lms"), logic: useYktProLogic },
-        { key: "ykt-auto", test: (url22) => isLikelyYktPage(url22), logic: useYktAutoLogic },
+        { key: "cx-chapter", lockKey: "cx-chapter", test: (url22) => url22.includes("/mycourse/studentstudy"), logic: useCxChapterLogic },
+        { key: "cx-work", lockKey: "cx-work", test: (url22) => url22.includes("/mooc2/work/dowork"), logic: useCxWorkLogic },
+        { key: "cx-exam", lockKey: "cx-exam", test: (url22) => url22.includes("/exam-ans/exam"), logic: useCxExamLogic },
+        { key: "ykt-v2", lockKey: "ykt", test: (url22) => url22.includes("/v2/web"), logic: useYktV2Logic },
+        { key: "ykt-pro", lockKey: "ykt", test: (url22) => url22.includes("/pro/lms"), logic: useYktProLogic },
+        { key: "ykt-auto", lockKey: "ykt", test: (url22) => isLikelyYktPage(url22), logic: useYktAutoLogic },
         {
           key: "cx-empty",
+          lockKey: "cx-empty",
           test: (url22) => url22.includes("mycourse/stu?courseid"),
           logic: () => {
             logStore.addLog("该页面无任务，请进入章节或任务页面使用", "danger");
@@ -6096,33 +6281,66 @@
       const executeLogicByUrl = (url22, force = false) => {
         const matchedPair = getMatchedLogicPair(url22);
         const nextLogicKey = matchedPair?.key || "";
+        const nextSceneKey = getPageSceneKey(url22);
         const shouldKeepVisible = !!matchedPair || isLikelyYktPage(url22) || url22.includes("chaoxing");
-        if (!force && runtimeState.currentRouteLogicKey === nextLogicKey) {
+        if (!force && runtimeState.currentRouteLogicKey === nextLogicKey && runtimeState.currentRouteSceneKey === nextSceneKey) {
           isShow.value = shouldKeepVisible;
           return;
         }
         runtimeState.currentRouteLogicKey = nextLogicKey;
+        runtimeState.currentRouteSceneKey = nextSceneKey;
         if (matchedPair) {
-          matchedPair.logic();
+          runExclusiveLogic(matchedPair.lockKey || matchedPair.key, matchedPair.logic);
           isShow.value = true;
           return;
         }
         isShow.value = shouldKeepVisible;
       };
       const emit = __emit;
+      const scheduleRouteSync = (force = false) => {
+        if (runtimeState.routeEvaluationTimer) {
+          clearTimeout(runtimeState.routeEvaluationTimer);
+        }
+        runtimeState.routeEvaluationTimer = window.setTimeout(() => {
+          runtimeState.routeEvaluationTimer = 0;
+          executeLogicByUrl(window.location.href, force);
+          emit("customEvent", isShow.value);
+        }, force ? 0 : 240);
+      };
       const startRouteWatcher = () => {
         if (runtimeState.routeWatcherStarted) {
           return;
         }
         runtimeState.routeWatcherStarted = true;
+        hookHistoryRouteEvents();
         let currentUrl = window.location.href;
-        setInterval(() => {
-          if (currentUrl !== window.location.href) {
+        const syncByUrl = (force = false) => {
+          if (force || currentUrl !== window.location.href) {
             currentUrl = window.location.href;
-            executeLogicByUrl(currentUrl);
-            emit("customEvent", isShow.value);
+            scheduleRouteSync(force);
           }
+        };
+        setInterval(() => {
+          syncByUrl();
         }, 1e3);
+        window.addEventListener(ROUTE_CHANGE_EVENT_NAME, () => syncByUrl(true));
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden) {
+            scheduleRouteSync();
+          }
+        });
+        if (!runtimeState.routeMutationWatcherStarted && document.documentElement) {
+          runtimeState.routeMutationWatcherStarted = true;
+          runtimeState.routeMutationObserver = new MutationObserver(() => {
+            if (allowFrameRuntime || isLikelyYktPage(window.location.href) || window.location.href.includes("chaoxing")) {
+              scheduleRouteSync();
+            }
+          });
+          runtimeState.routeMutationObserver.observe(document.documentElement, {
+            childList: true,
+            subtree: true
+          });
+        }
       };
       executeLogicByUrl(url2, true);
       startRouteWatcher();
@@ -6146,7 +6364,7 @@
           component: Tutorial
         },
         {
-          label: "协议",
+          label: "说明",
           icon: view_default,
           component: ScriptTip
         }
@@ -6390,6 +6608,7 @@
   cssLoader("ElementPlus");
   const layoutCss = ".main-page{z-index:100003;position:fixed}.main-page .overlay{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1001}.main-page .el-card .card-header{display:flex;justify-content:space-between;flex-direction:row;align-items:center;margin:0;padding:0;cursor:move}.main-page .el-card .card-header .title{font-size:14px;display:flex;align-items:center;justify-content:center;font-weight:500}.main-page .el-card .minus{margin:5px 10px -10px 0}.main-page .demo-tabs{display:initial}.main-page .el-card__header{background-color:#1f71e0;color:#fff;padding:7px 10px 7px 16px;margin:0}.main-page .el-card__body{padding:0 16px 20px}.main-page .el-tabs__nav-wrap:after{height:1px}.main-page .el-tabs__active-bar{background-color:#176ae5}.main-page .el-tabs__item{font-size:13px;height:34px}.main-page .el-tabs__item.is-top{font-weight:400;color:#4e5969;padding:0 8px 0 12px}.main-page .el-tabs__item.is-active{font-weight:500;color:#176ae5;padding:0 8px 0 12px}\n";
   startPasteUnlockWatcher();
+  startYktBackgroundWatcher();
   const timer = setInterval(() => {
     if (document.readyState === "complete") {
       clearInterval(timer);
